@@ -1,10 +1,12 @@
 import socket
 import threading
 import json
+import select
+import sys
 
 my_color = None
-current_turn = None
-game_id = 1  # This should match the game ID from the server
+current_turn = "white"  # Initialize with white's turn
+chat_socket = None
 
 def listen_for_updates(client_socket):
     global current_turn
@@ -23,8 +25,8 @@ def listen_for_updates(client_socket):
                 global my_color
                 my_color = message["color"]
                 print(f"You are playing as {my_color.upper()}")
-                # Connect to chat server after getting color
-                connect_to_chat()
+                if my_color == "white":
+                    print("You can make the first move!")
 
             elif message["type"] == "update":
                 current_turn = message["turn"]
@@ -61,59 +63,58 @@ def listen_for_chat(chat_socket):
                 break
 
             message = json.loads(data)
-            
             if message["type"] == "chat":
-                print(f"\n[{message['color'].upper()}] {message['content']}")
-            elif message["type"] == "system":
-                print(f"\n[SYSTEM] {message['content']}")
-            
-            # Print the input prompt again
-            print("\nEnter move (e.g., e2e4) or type 'chat' to send a message:", end=" ")
-
+                print(f"\n[CHAT] {message['message']}")
+                print("Enter 'p' to play or 'c' to chat: ", end='', flush=True)
         except Exception as e:
-            print(f"[CHAT ERROR] Lost connection to chat server: {e}")
+            print(f"\n[ERROR] Lost connection to chat server: {e}")
             break
-
-def connect_to_chat():
-    chat_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    chat_socket.connect(('127.0.0.1', 5556))
-    
-    # Send join message to chat server
-    chat_socket.send(json.dumps({
-        "type": "join",
-        "game_id": game_id,
-        "color": my_color
-    }).encode())
-    
-    # Start chat listener thread
-    threading.Thread(target=listen_for_chat, args=(chat_socket,), daemon=True).start()
-    return chat_socket
 
 def main():
     host = '127.0.0.1'
-    port = 5555
-    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client_socket.connect((host, port))
+    game_port = 5555
+    chat_port = 5556
 
-    threading.Thread(target=listen_for_updates, args=(client_socket,), daemon=True).start()
+    # Connect to game server
+    game_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    game_socket.connect((host, game_port))
 
-    chat_socket = None
+    # Connect to chat server
+    global chat_socket
+    chat_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    chat_socket.connect((host, chat_port))
+
+    # Start listening threads
+    threading.Thread(target=listen_for_updates, args=(game_socket,), daemon=True).start()
+    threading.Thread(target=listen_for_chat, args=(chat_socket,), daemon=True).start()
+
+    print("Connected to both game and chat servers!")
+    print("Enter 'p' to play or 'c' to chat")
+
     while True:
-        user_input = input("\nEnter move (e.g., e2e4) or type 'chat' to send a message: ").strip()
+        mode = input("Enter 'p' to play or 'c' to chat: ").strip().lower()
         
-        if user_input.lower() == "chat":
-            if chat_socket is None:
-                chat_socket = connect_to_chat()
+        if mode == 'p':
+            if current_turn != my_color:
+                print("Not your turn! Please wait.")
+                continue
+                
+            move = input("Enter your move (e.g., e2e4): ").strip()
+            if move == "":
+                continue
+            game_socket.send(json.dumps({"type": "move", "move": move}).encode())
+            
+        elif mode == 'c':
             message = input("Enter your message: ").strip()
-            if message:
-                chat_socket.send(json.dumps({
-                    "type": "chat",
-                    "content": message
-                }).encode())
+            if message == "":
+                continue
+            chat_socket.send(json.dumps({
+                "type": "chat",
+                "message": f"{my_color.upper()}: {message}"
+            }).encode())
+            
         else:
-            if user_input:
-                client_socket.send(json.dumps({"type": "move", "move": user_input}).encode())
-
+            print("Invalid mode! Please enter 'p' for play or 'c' for chat.")
 
 if __name__ == "__main__":
     main()
